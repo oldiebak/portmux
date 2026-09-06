@@ -1,0 +1,12 @@
+# 构建产物
+/build/
+/dist/
+/portmux-dist.tar.gz
+/internal/bpf/*.bpf.o
+/cmd/gen/*.tmpl
+
+# 本地 Go 工具链
+/.tools/
+
+# 临时调试脚本 (点前缀 python)
+.*.py

